@@ -1,4 +1,4 @@
-Flask==3.0.0
+
 Flask-CORS==4.0.0
 Flask-SQLAlchemy==3.1.1
 Flask-JWT-Extended==4.6.0
@@ -12,3 +12,20 @@ Werkzeug==3.0.1
 reportlab==4.0.7
 pandas==2.1.4
 openpyxl==3.1.2
+
+# Core Framework
+Flask==3.0.2
+
+
+# Database & ORM
+
+SQLAlchemy==2.0.27
+
+
+# Authentication & Security
+
+bcrypt==4.1.2
+
+# Utilities
+
+python-dotenv==1.0.1
