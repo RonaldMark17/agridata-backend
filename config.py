@@ -6,13 +6,13 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 class Config:
     """Base configuration"""
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
+    SECRET_KEY = os.environ.get('SECRET_KEY') or '5ccd0e882a4ab8801e60b7fd9a0fc2081993fca07d9d3d5270372e6e5712b25c'
     
     # Database - MySQL/MariaDB Configuration (SQLAlchemy)
     SQLALCHEMY_TRACK_MODIFICATIONS = False # Suppress overhead warning
     
     # JWT Configuration
-    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or 'jwt-secret-key-change-in-production'
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or '87ffb15a41b02dcea7b5f83160c5edb7c388d2c83fbbeece02ac67c33d14c5f6'
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=12)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
     
@@ -44,7 +44,7 @@ class ProductionConfig(Config):
     DEBUG = False
     # In production, require the environment variable to be set
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or \
-        'mysql+pymysql://user:password@localhost/agridata_prod'
+        'mysql+pymysql://user:@localhost/agridata_prod'
     
 class TestingConfig(Config):
     """Testing configuration"""

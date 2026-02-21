@@ -1,10 +1,23 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy.orm import relationship
-from datetime import datetime
 
 db = SQLAlchemy()
+
+# --- ASSOCIATION TABLES (Defined first to avoid reference errors) ---
+
+experience_likes = db.Table('experience_likes',
+    db.Column('user_id', db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('experience_id', db.Integer, db.ForeignKey('farmer_experiences.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('created_at', db.DateTime, default=datetime.utcnow)
+)
+
+comment_likes = db.Table('comment_likes',
+    db.Column('user_id', db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('comment_id', db.Integer, db.ForeignKey('experience_comments.id', ondelete='CASCADE'), primary_key=True)
+)
+
+# --- MODELS ---
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -15,10 +28,18 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     full_name = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(50), nullable=False) 
-    organization_id = db.Column(db.String(255)) 
+    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
     is_active = db.Column(db.Boolean, default=True)
+    
+    # --- OTP FIELDS ---
+    otp_code = db.Column(db.String(6))
+    otp_expiry = db.Column(db.DateTime)
+    otp_enabled = db.Column(db.Boolean, default=False)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    liked_experiences = db.relationship('FarmerExperience', secondary=experience_likes, back_populates='liked_by')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -33,8 +54,9 @@ class User(db.Model):
             'email': self.email,
             'full_name': self.full_name,
             'role': self.role,
-            'organization': self.organization_id,
+            'organization_id': self.organization_id,
             'is_active': self.is_active,
+            'otp_enabled': self.otp_enabled,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
@@ -44,10 +66,12 @@ class Organization(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
     type = db.Column(db.String(50), nullable=False)
+    description = db.Column(db.Text) 
+    address = db.Column(db.Text) 
+    
     contact_person = db.Column(db.String(255))
     contact_email = db.Column(db.String(255))
     contact_phone = db.Column(db.String(50))
-    address = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -56,10 +80,11 @@ class Organization(db.Model):
             'id': self.id,
             'name': self.name,
             'type': self.type,
+            'description': self.description,
+            'location': self.address,
             'contact_person': self.contact_person,
             'contact_email': self.contact_email,
-            'contact_phone': self.contact_phone,
-            'address': self.address
+            'contact_phone': self.contact_phone
         }
 
 class Barangay(db.Model):
@@ -67,6 +92,8 @@ class Barangay(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
     municipality = db.Column(db.String(255), nullable=False)
     province = db.Column(db.String(255), nullable=False)
     region = db.Column(db.String(255), nullable=False)
@@ -108,41 +135,28 @@ class AgriculturalProduct(db.Model):
 class Farmer(db.Model):
     __tablename__ = 'farmers'
 
-    # Column order matches your SQL schema exactly
     id = db.Column(db.Integer, primary_key=True)
     farmer_code = db.Column(db.String(50), unique=True)
-    
-    # Name Fields (positions 3-6)
     first_name = db.Column(db.String(100), nullable=False)
     middle_name = db.Column(db.String(100))
     last_name = db.Column(db.String(100), nullable=False)
     suffix = db.Column(db.String(20))
-    
-    # Demographics (positions 7-8)
     age = db.Column(db.Integer, nullable=False)
     gender = db.Column(db.String(20), nullable=False)
-    
-    # Profile Image (position 9) - BEFORE birth_date
     profile_image = db.Column(db.String(500))
-    
-    # Birth Date (position 10)
     birth_date = db.Column(db.Date)
     
-    # Location & Relationships (positions 11-13)
     barangay_id = db.Column(db.Integer, db.ForeignKey('barangays.id'), nullable=False)
-    barangay = relationship('Barangay', backref='farmers')
+    barangay = db.relationship('Barangay', backref='farmers')
     
     organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
-    organization = relationship('Organization', backref='farmers')
+    organization = db.relationship('Organization', backref='farmers')
     
     data_encoder_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    data_encoder = relationship('User', backref='farmers_encoded')
+    data_encoder = db.relationship('User', backref='farmers_encoded')
     
-    # Contact Info (positions 14-15)
     address = db.Column(db.Text)
     contact_number = db.Column(db.String(50))
-    
-    # Socio-Economic (positions 16-22)
     education_level = db.Column(db.String(50), nullable=False)
     annual_income = db.Column(db.Numeric(12, 2))
     income_source = db.Column(db.String(255))
@@ -150,39 +164,23 @@ class Farmer(db.Model):
     children_farming_involvement = db.Column(db.Boolean, default=False)
     primary_occupation = db.Column(db.String(255))
     secondary_occupation = db.Column(db.String(255))
-    
-    # Farm Details (positions 23-25)
     farm_size_hectares = db.Column(db.Numeric(10, 2))
     land_ownership = db.Column(db.String(50))
     years_farming = db.Column(db.Integer)
     
-    # Timestamps (positions 26-27)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    civil_status = db.Column(db.String(20), default='Single')
 
-    # Helper for full name display
     @property
     def full_name(self):
         parts = [self.first_name, self.middle_name, self.last_name, self.suffix]
         return " ".join([p for p in parts if p]).strip()
 
     def get_image_url(self):
-        """
-        Generate the proper image URL for the profile picture.
-        Handles both absolute URLs (http/https) and relative paths.
-        """
-        if not self.profile_image:
-            return None
-        
-        # If it's already an absolute URL (starts with http:// or https://), return as-is
-        if self.profile_image.startswith(('http://', 'https://')):
-            return self.profile_image
-        
-        # If it's a relative path starting with /, return as-is
-        if self.profile_image.startswith('/'):
-            return self.profile_image
-        
-        # Otherwise, construct full path assuming it's stored in uploads folder
+        if not self.profile_image: return None
+        if self.profile_image.startswith(('http://', 'https://')): return self.profile_image
+        if self.profile_image.startswith('/'): return self.profile_image
         return f"/uploads/{self.profile_image}"
 
     def to_dict(self, include_relations=False):
@@ -196,7 +194,8 @@ class Farmer(db.Model):
             'full_name': self.full_name,
             'age': self.age,
             'gender': self.gender,
-            'profile_image': self.get_image_url(),  # Use helper method
+            'civil_status': self.civil_status,
+            'profile_image': self.get_image_url(),
             'birth_date': self.birth_date.isoformat() if self.birth_date else None,
             'barangay_id': self.barangay_id,
             'organization_id': self.organization_id,
@@ -224,14 +223,11 @@ class Farmer(db.Model):
 
 class FarmerProduct(db.Model):
     __tablename__ = 'farmer_products'
-
     id = db.Column(db.Integer, primary_key=True)
     farmer_id = db.Column(db.Integer, db.ForeignKey('farmers.id', ondelete='CASCADE'), nullable=False)
-    farmer = relationship('Farmer', backref=db.backref('products', cascade='all, delete-orphan'))
-    
+    farmer = db.relationship('Farmer', backref=db.backref('products', cascade='all, delete-orphan'))
     product_id = db.Column(db.Integer, db.ForeignKey('agricultural_products.id'), nullable=False)
-    product = relationship('AgriculturalProduct')
-    
+    product = db.relationship('AgriculturalProduct')
     production_volume = db.Column(db.Numeric(10, 2))
     unit = db.Column(db.String(50))
     is_primary = db.Column(db.Boolean, default=False)
@@ -251,11 +247,9 @@ class FarmerProduct(db.Model):
 
 class FarmerChild(db.Model):
     __tablename__ = 'farmer_children'
-
     id = db.Column(db.Integer, primary_key=True)
     farmer_id = db.Column(db.Integer, db.ForeignKey('farmers.id', ondelete='CASCADE'), nullable=False)
-    farmer = relationship('Farmer', backref=db.backref('children', cascade='all, delete-orphan'))
-    
+    farmer = db.relationship('Farmer', backref=db.backref('children', cascade='all, delete-orphan'))
     name = db.Column(db.String(255))
     age = db.Column(db.Integer)
     gender = db.Column(db.String(20))
@@ -279,28 +273,65 @@ class FarmerChild(db.Model):
             'notes': self.notes
         }
 
+class ExperienceComment(db.Model):
+    __tablename__ = 'experience_comments'
+    id = db.Column(db.Integer, primary_key=True)
+    experience_id = db.Column(db.Integer, db.ForeignKey('farmer_experiences.id', ondelete='CASCADE'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User') 
+    liked_by = db.relationship('User', secondary=comment_likes, backref=db.backref('liked_comments', lazy='dynamic'))
+
+    def to_dict(self, current_user_id=None):
+        try:
+            uid = int(current_user_id) if current_user_id else None
+        except:
+            uid = None
+
+        likes_list = self.liked_by if self.liked_by is not None else []
+
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'user_name': self.user.full_name if self.user else 'Unknown',
+            'text': self.text,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'likes_count': len(likes_list),
+            'is_liked_by_me': any(int(u.id) == uid for u in likes_list) if uid else False
+        }
+
 class FarmerExperience(db.Model):
     __tablename__ = 'farmer_experiences'
-
     id = db.Column(db.Integer, primary_key=True)
     farmer_id = db.Column(db.Integer, db.ForeignKey('farmers.id', ondelete='CASCADE'), nullable=False)
-    farmer = relationship('Farmer', backref=db.backref('experiences', cascade='all, delete-orphan'))
-    
+    farmer = db.relationship('Farmer', backref=db.backref('experiences', cascade='all, delete-orphan'))
     experience_type = db.Column(db.String(50), nullable=False)
     title = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=False)
     date_recorded = db.Column(db.Date)
-    
     interviewer_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    interviewer = relationship('User')
-    
+    interviewer = db.relationship('User', foreign_keys=[interviewer_id])
     location = db.Column(db.String(255))
     context = db.Column(db.Text)
     impact_level = db.Column(db.String(20))
+    comments_enabled = db.Column(db.Boolean, default=True) 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def to_dict(self, include_relations=False):
+    liked_by = db.relationship('User', secondary=experience_likes, back_populates='liked_experiences')
+    comments = db.relationship('ExperienceComment', backref='experience', cascade='all, delete-orphan', order_by='ExperienceComment.created_at.asc()')
+
+    def to_dict(self, include_relations=False, current_user_id=None):
+        try:
+            uid = int(current_user_id) if current_user_id else None
+        except (ValueError, TypeError):
+            uid = None
+
+        likes_list = self.liked_by if self.liked_by is not None else []
+        comments_list = self.comments if self.comments is not None else []
+
         data = {
             'id': self.id,
             'farmer_id': self.farmer_id,
@@ -308,33 +339,32 @@ class FarmerExperience(db.Model):
             'title': self.title,
             'description': self.description,
             'date_recorded': self.date_recorded.isoformat() if self.date_recorded else None,
-            'interviewer_id': self.interviewer_id,
             'location': self.location,
-            'context': self.context,
             'impact_level': self.impact_level,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'comments_enabled': self.comments_enabled,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            
+            'likes_count': len(likes_list),
+            'is_liked_by_me': any(int(u.id) == uid for u in likes_list) if uid else False,
+            
+            'comments_count': len(comments_list),
+            'comments': [c.to_dict(current_user_id=uid) for c in comments_list]
         }
         
         if include_relations:
-            data['farmer_name'] = self.farmer.full_name if self.farmer else None
-            data['interviewer_name'] = self.interviewer.full_name if self.interviewer else None
-            
+            data['farmer_name'] = self.farmer.full_name if self.farmer else "Unknown"
         return data
 
 class ResearchProject(db.Model):
     __tablename__ = 'research_projects'
-
     id = db.Column(db.Integer, primary_key=True)
     project_code = db.Column(db.String(50), unique=True)
     title = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
-    
-    principal_investigator_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    principal_investigator = relationship('User')
-    
+    principal_investigator_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    principal_investigator = db.relationship('User')
     organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
-    organization = relationship('Organization')
-    
+    organization = db.relationship('Organization')
     start_date = db.Column(db.Date)
     end_date = db.Column(db.Date)
     status = db.Column(db.String(50), default='Planning')
@@ -364,28 +394,20 @@ class ResearchProject(db.Model):
             'funding_source': self.funding_source,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
-        
         if include_relations:
             data['principal_investigator_name'] = self.principal_investigator.full_name if self.principal_investigator else None
             data['organization_name'] = self.organization.name if self.organization else None
-            
         return data
 
 class SurveyQuestionnaire(db.Model):
     __tablename__ = 'survey_questionnaires'
-
     id = db.Column(db.Integer, primary_key=True)
     project_id = db.Column(db.Integer, db.ForeignKey('research_projects.id'))
-    project = relationship('ResearchProject', backref='surveys')
-    
     title = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
-    survey_type = db.Column(db.String(50), nullable=False)
+    category = db.Column(db.String(50), nullable=False, default='General') 
     target_group = db.Column(db.String(255))
-    
-    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
-    creator = relationship('User')
-    
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -396,7 +418,7 @@ class SurveyQuestionnaire(db.Model):
             'project_id': self.project_id,
             'title': self.title,
             'description': self.description,
-            'survey_type': self.survey_type,
+            'category': self.category,
             'target_group': self.target_group,
             'created_by': self.created_by,
             'is_active': self.is_active,
@@ -405,14 +427,11 @@ class SurveyQuestionnaire(db.Model):
 
 class ActivityLog(db.Model):
     __tablename__ = 'activity_logs'
-
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    user = relationship('User')
-    
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    user = db.relationship('User')
     action = db.Column(db.String(255), nullable=False)
     entity_type = db.Column(db.String(100))
-    # Stores the ID of the affected entity as a string for flexibility
     entity_id = db.Column(db.String(100)) 
     details = db.Column(db.Text)
     ip_address = db.Column(db.String(50))
@@ -429,12 +448,11 @@ class ActivityLog(db.Model):
             'details': self.details,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
-        
-# Add this to your models.py
+
 class Notification(db.Model):
     __tablename__ = 'notifications'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True) # Ensure this matches your User model PK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=True) 
     title = db.Column(db.String(255), nullable=False)
     message = db.Column(db.Text, nullable=False)
     is_read = db.Column(db.Boolean, default=False)
@@ -448,4 +466,17 @@ class Notification(db.Model):
             "is_read": self.is_read,
             "created_at": self.created_at.isoformat(),
             "created_at_human": self.created_at.strftime("%b %d, %I:%M %p")
+        }
+        
+class TokenBlocklist(db.Model):
+    __tablename__ = 'token_blocklist'
+    id = db.Column(db.Integer, primary_key=True)
+    jti = db.Column(db.String(36), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "jti": self.jti,
+            "created_at": self.created_at.isoformat()
         }
