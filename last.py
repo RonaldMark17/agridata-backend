@@ -1,8 +1,8 @@
 # from flask import Flask, request, jsonify, send_file, send_from_directory
 # from flask_cors import CORS
-# from flask_jwt_extended import JWTManager, create_access_token, create_refresh_token, jwt_required, get_jwt_identity
+# from flask_jwt_extended import JWTManager, create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
 # from werkzeug.utils import secure_filename
-# from datetime import datetime, date, timedelta
+# from datetime import datetime, date, timedelta, timezone
 # import os
 # import io
 # import csv
@@ -16,7 +16,8 @@
 # from models import (
 #     db, User, Organization, Barangay, AgriculturalProduct, Farmer, 
 #     FarmerProduct, FarmerChild, FarmerExperience, ResearchProject,
-#     SurveyQuestionnaire, ActivityLog, Notification
+#     SurveyQuestionnaire, ActivityLog, Notification, ExperienceComment,
+#     TokenBlocklist # <--- ADD THIS HERE
 # )
 
 # def create_app(config_name='development'):
@@ -27,6 +28,10 @@
 #     app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 #     # Ensure UPLOAD_FOLDER is set
 #     app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'static', 'uploads')
+    
+#     app.config["JWT_TOKEN_LOCATION"] = ["headers"]
+#     app.config["JWT_BLACKLIST_ENABLED"] = True
+#     app.config["JWT_BLACKLIST_TOKEN_CHECKS"] = ["access", "refresh"]
 
 #     # Initialize extensions (SQLAlchemy)
 #     db.init_app(app)
@@ -39,6 +44,25 @@
 #      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 #     jwt = JWTManager(app)
+
+#     # --- NEW: JWT Blocklist Callbacks for Session Management ---
+#     # --- UPDATED: Resilient Session Check ---
+#     @jwt.token_in_blocklist_loader
+#     def check_if_token_revoked(jwt_header, jwt_payload: dict) -> bool:
+#         jti = jwt_payload["jti"]
+#         try:
+#             # We query the DB for the unique Token ID (jti)
+#             token = TokenBlocklist.query.filter_by(jti=jti).first()
+#             return token is not None
+#         except Exception:
+#             # If DB is temporarily unreachable during restart, don't kick user out
+#             return False
+        
+#     @jwt.revoked_token_loader
+#     def revoked_token_callback(jwt_header, jwt_payload):
+#         return jsonify(
+#             {"error": "The session has expired or been terminated. Please log in again."}
+#         ), 401
     
 #     # Add this specific handler for Preflight (OPTIONS) requests
 #     @app.before_request
@@ -87,19 +111,25 @@
 #             db.session.add(log)
             
 #             # --- NEW: AUTOMATED NOTIFICATION GENERATOR ---
-#             # This makes notifications function exactly like activity logs.
+#             # Fan-out to all active users EXCEPT the user doing the action
 #             try:
 #                 notif_title = f"{formatted_entity} Update" if formatted_entity else f"System Event: {formatted_action}"
 #                 notif_msg = details if details else f"A new {formatted_action} action was recorded."
                 
-#                 auto_notif = Notification(
-#                     user_id=None, # Broadcast to all system admins/operators
-#                     title=notif_title,
-#                     message=notif_msg,
-#                     is_read=False,
-#                     created_at=datetime.utcnow()
-#                 )
-#                 db.session.add(auto_notif)
+#                 active_users = User.query.filter_by(is_active=True).all()
+#                 for u in active_users:
+#                     # Skip the user who triggered the action!
+#                     if user_id and str(u.id) == str(user_id):
+#                         continue
+                        
+#                     auto_notif = Notification(
+#                         user_id=u.id, 
+#                         title=notif_title,
+#                         message=notif_msg,
+#                         is_read=False,
+#                         created_at=datetime.utcnow()
+#                     )
+#                     db.session.add(auto_notif)
 #             except Exception as notif_e:
 #                 print(f"Auto-Notif Generation Error: {str(notif_e)}")
 #             # ---------------------------------------------
@@ -114,17 +144,42 @@
 #     def broadcast_notification(title, message, target_user_id=None):
 #         """
 #         Creates a notification record.
-#         target_user_id: None for System-Wide, or ID for specific user.
+#         target_user_id: None for System-Wide (excluding self), or ID for specific user.
 #         """
 #         try:
-#             new_alert = Notification(
-#                 user_id=target_user_id, 
-#                 title=title,
-#                 message=message,
-#                 is_read=False,
-#                 created_at=datetime.utcnow()
-#             )
-#             db.session.add(new_alert)
+#             current_uid = None
+#             try:
+#                 current_uid = get_jwt_identity()
+#             except:
+#                 pass
+
+#             if target_user_id:
+#                 # Direct message to a specific user (make sure it's not self)
+#                 if str(target_user_id) != str(current_uid):
+#                     new_alert = Notification(
+#                         user_id=target_user_id, 
+#                         title=title,
+#                         message=message,
+#                         is_read=False,
+#                         created_at=datetime.utcnow()
+#                     )
+#                     db.session.add(new_alert)
+#             else:
+#                 # System-wide broadcast: Send to everyone EXCEPT self
+#                 active_users = User.query.filter_by(is_active=True).all()
+#                 for u in active_users:
+#                     if current_uid and str(u.id) == str(current_uid):
+#                         continue # DO NOT NOTIFY SELF
+                    
+#                     new_alert = Notification(
+#                         user_id=u.id, 
+#                         title=title,
+#                         message=message,
+#                         is_read=False,
+#                         created_at=datetime.utcnow()
+#                     )
+#                     db.session.add(new_alert)
+                    
 #             # Note: We let the calling function do the commit to ensure transaction integrity
 #         except Exception as e:
 #             print(f"Notification Creation Error: {str(e)}")
@@ -165,6 +220,7 @@
 #                 except Exception as e:
 #                     print(f"Error deleting file {filename}: {e}")
 #         return False
+    
     
 #     # ============ Static File Serving (Images) ============
 #     @app.route('/static/uploads/<filename>')
@@ -286,6 +342,30 @@
 #         except Exception as e:
 #             print(f"❌ LOGIN ERROR: {str(e)}")
 #             return jsonify({'error': 'Internal Server Error'}), 500
+            
+#     # --- NEW: SECURE LOGOUT ROUTE ---
+#     @app.route('/api/auth/logout', methods=['POST'])
+#     @jwt_required(verify_type=False) 
+#     def logout():
+#         try:
+#             token = get_jwt()
+#             jti = token["jti"]
+#             ttype = token["type"]
+            
+#             # Add the token to the blocklist
+#             db.session.add(TokenBlocklist(jti=jti, created_at=datetime.utcnow()))
+#             db.session.commit()
+            
+#             # Identify user to log
+#             current_user_id = get_jwt_identity()
+#             user = User.query.get(current_user_id)
+#             if user:
+#                 log_activity('LOGOUT SUCCESS', 'User', user.id, f"User {user.username} successfully terminated session")
+                
+#             return jsonify({"message": f"{ttype.capitalize()} token successfully revoked"}), 200
+#         except Exception as e:
+#             print(f"Logout Error: {e}")
+#             return jsonify({"error": "Failed to terminate session properly"}), 500
 
 #     @app.route('/api/auth/verify-otp', methods=['POST'])
 #     def verify_login_otp():
@@ -495,85 +575,101 @@
 #     @app.route('/api/dashboard/stats', methods=['GET'])
 #     @jwt_required()
 #     def get_dashboard_stats():
-#         # 1. Get the Time Filter (all, month, year)
-#         time_range = request.args.get('range', 'all')
-        
-#         # 2. Define the Date Cutoff
-#         start_date = None
-#         if time_range == 'month':
-#             start_date = datetime.utcnow() - timedelta(days=30)
-#         elif time_range == 'year':
-#             start_date = datetime.utcnow() - timedelta(days=365)
+#         try:
+#             # 1. Get the Time Filter
+#             time_range = request.args.get('range', 'all')
+#             start_date = None
+#             if time_range == 'month':
+#                 start_date = datetime.utcnow() - timedelta(days=30)
+#             elif time_range == 'year':
+#                 start_date = datetime.utcnow() - timedelta(days=365)
 
-#         # 3. Helper to filter queries by date if needed
-#         def apply_date_filter(query, model):
-#             if start_date and hasattr(model, 'created_at'):
-#                 return query.filter(model.created_at >= start_date)
-#             return query
+#             # 2. Helper to filter queries by date safely
+#             def apply_date_filter(query, model):
+#                 if start_date and hasattr(model, 'created_at'):
+#                     return query.filter(model.created_at >= start_date)
+#                 return query
 
-#         # 4. Execute Queries with Filters
-#         total_farmers = apply_date_filter(Farmer.query, Farmer).count()
-#         total_barangays = Barangay.query.count() 
-#         total_products = AgriculturalProduct.query.count()
-        
-#         total_experiences = apply_date_filter(FarmerExperience.query, FarmerExperience).count()
-#         total_projects = apply_date_filter(ResearchProject.query, ResearchProject).count()
-        
-#         children_farming = FarmerChild.query.filter_by(continues_farming=True).count()
-#         total_children = FarmerChild.query.count() 
-        
-#         # Added for Summary Analysis
-#         total_users = User.query.count()
-#         total_surveys = SurveyQuestionnaire.query.count()
-        
-#         recent_activities = ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(10).all()
-        
-#         # 5. Filter Charts (Education & Geography)
-#         edu_query = db.session.query(Farmer.education_level, func.count(Farmer.id))
-#         if start_date: edu_query = edu_query.filter(Farmer.created_at >= start_date)
-#         education_stats_query = edu_query.group_by(Farmer.education_level).all()
-        
-#         # Removed .limit(5) so the modal can view ALL barangays
-#         prod_stats_query = db.session.query(Barangay.name, func.count(Farmer.id)).join(Farmer.barangay)
-#         if start_date: prod_stats_query = prod_stats_query.filter(Farmer.created_at >= start_date)
-#         product_stats_result = prod_stats_query.group_by(Barangay.name).order_by(func.count(Farmer.id).desc()).all()
+#             # 3. Core Metrics with Null Handling
+#             total_farmers = apply_date_filter(Farmer.query, Farmer).count()
+#             total_barangays = Barangay.query.count() or 0
+#             total_products = AgriculturalProduct.query.count() or 0
+#             total_experiences = apply_date_filter(FarmerExperience.query, FarmerExperience).count() or 0
+#             total_projects = apply_date_filter(ResearchProject.query, ResearchProject).count() or 0
+            
+#             # Youth Succession Count
+#             children_farming = FarmerChild.query.filter_by(continues_farming=True).count() or 0
+#             total_children = FarmerChild.query.count() or 0
+            
+#             # System Entities
+#             total_users = User.query.count() or 0
+#             total_surveys = SurveyQuestionnaire.query.count() or 0
 
-#         # 6. SUMMARY DATA ANALYSIS (Executive Analytics)
-#         avg_age = apply_date_filter(db.session.query(func.avg(Farmer.age)), Farmer).scalar() or 0
-#         avg_income = apply_date_filter(db.session.query(func.avg(Farmer.annual_income)), Farmer).scalar() or 0
-#         avg_land_size = apply_date_filter(db.session.query(func.avg(Farmer.farm_size_hectares)), Farmer).scalar() or 0
-        
-#         # Format list outputs
-#         education_stats = [{'level': l or "Unknown", 'count': c} for l, c in education_stats_query]
-#         product_stats = [{'barangay': n, 'count': c} for n, c in product_stats_result]
-        
-#         # Determine top categories
-#         top_education = max(education_stats, key=lambda x: x['count'])['level'] if education_stats else "N/A"
-#         top_barangay = max(product_stats, key=lambda x: x['count'])['barangay'] if product_stats else "N/A"
+#             # 4. Academic Profile Data
+#             edu_query = db.session.query(Farmer.education_level, func.count(Farmer.id))
+#             if start_date: 
+#                 edu_query = edu_query.filter(Farmer.created_at >= start_date)
+#             education_stats_raw = edu_query.group_by(Farmer.education_level).all()
+#             education_stats = [{'level': (l or "Unknown"), 'count': c} for l, c in education_stats_raw]
 
-#         summary_analysis = {
-#             "average_farmer_age": round(float(avg_age), 1),
-#             "average_annual_income": round(float(avg_income), 2),
-#             "average_land_size_ha": round(float(avg_land_size), 2),
-#             "top_education_level": top_education,
-#             "most_populated_barangay": top_barangay,
-#             "total_system_users": total_users,
-#             "total_active_surveys": total_surveys
-#         }
+#             # 5. Territorial Density Data
+#             prod_stats_query = db.session.query(
+#                 Barangay.name, 
+#                 func.count(Farmer.id)
+#             ).join(Farmer, Barangay.id == Farmer.barangay_id)
+            
+#             if start_date: 
+#                 prod_stats_query = prod_stats_query.filter(Farmer.created_at >= start_date)
+            
+#             product_stats_raw = prod_stats_query.group_by(Barangay.name).order_by(func.count(Farmer.id).desc()).all()
+#             product_stats = [{'barangay': n, 'count': c} for n, c in product_stats_raw]
 
-#         return jsonify({
-#             'total_farmers': total_farmers,
-#             'total_barangays': total_barangays,
-#             'total_products': total_products,
-#             'total_experiences': total_experiences,
-#             'total_projects': total_projects,
-#             'children_farming': children_farming,
-#             'total_children': total_children,
-#             'recent_activities': [log.to_dict() for log in recent_activities],
-#             'education_stats': education_stats,
-#             'product_stats': product_stats,
-#             'summary_analysis': summary_analysis
-#         }), 200
+#             # 6. EXECUTIVE SUMMARY ANALYSIS
+#             raw_age = apply_date_filter(db.session.query(func.avg(Farmer.age)), Farmer).scalar() or 0
+#             raw_income = apply_date_filter(db.session.query(func.avg(Farmer.annual_income)), Farmer).scalar() or 0
+#             raw_land = apply_date_filter(db.session.query(func.avg(Farmer.farm_size_hectares)), Farmer).scalar() or 0
+
+#             top_edu = "N/A"
+#             if education_stats:
+#                 top_edu = max(education_stats, key=lambda x: x['count'])['level']
+            
+#             top_brgy = "N/A"
+#             if product_stats:
+#                 top_brgy = max(product_stats, key=lambda x: x['count'])['barangay']
+
+#             summary_analysis = {
+#                 "average_farmer_age": round(float(raw_age), 1),
+#                 "average_annual_income": round(float(raw_income), 2),
+#                 "average_land_size_ha": round(float(raw_land), 2),
+#                 "top_education_level": top_edu,
+#                 "most_populated_barangay": top_brgy,
+#                 "total_system_users": total_users,
+#                 "total_active_surveys": total_surveys
+#             }
+
+#             recent_activities = ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(10).all()
+
+#             return jsonify({
+#                 'total_farmers': total_farmers,
+#                 'total_barangays': total_barangays,
+#                 'total_products': total_products,
+#                 'total_experiences': total_experiences,
+#                 'total_projects': total_projects,
+#                 'children_farming': children_farming,
+#                 'total_children': total_children,
+#                 'recent_activities': [log.to_dict() for log in recent_activities],
+#                 'education_stats': education_stats,
+#                 'product_stats': product_stats,
+#                 'summary_analysis': summary_analysis
+#             }), 200
+
+#         except Exception as e:
+#             print(f"CRITICAL DASHBOARD ERROR: {str(e)}")
+#             traceback.print_exc()
+#             return jsonify({
+#                 'error': 'Analytics Engine Error',
+#                 'message': str(e)
+#             }), 500
     
 #     # ============ Notification Routes ============
     
@@ -583,10 +679,9 @@
 #         try:
 #             current_user_id = get_jwt_identity()
             
-#             # Fetch User-Specific AND System-Wide notifications
-#             notifications = Notification.query.filter(
-#                 (Notification.user_id == current_user_id) | (Notification.user_id == None)
-#             ).order_by(Notification.created_at.desc()).limit(20).all()
+#             # Fetch ONLY personal notifications assigned to this user
+#             notifications = Notification.query.filter_by(user_id=current_user_id)\
+#                 .order_by(Notification.created_at.desc()).limit(20).all()
             
 #             return jsonify([n.to_dict() for n in notifications]), 200
 #         except Exception as e:
@@ -597,10 +692,11 @@
 #     @jwt_required()
 #     def mark_read(id):
 #         try:
-#             # We don't filter by user_id here because we might be marking a System Msg (NULL) as read
+#             current_user_id = get_jwt_identity()
 #             notif = Notification.query.get_or_404(id)
-#             notif.is_read = True
-#             db.session.commit()
+#             if str(notif.user_id) == str(current_user_id):
+#                 notif.is_read = True
+#                 db.session.commit()
 #             return jsonify({"message": "Read status updated"}), 200
 #         except Exception as e:
 #             db.session.rollback()
@@ -612,14 +708,10 @@
 #         try:
 #             current_user_id = get_jwt_identity()
             
-#             # FIX: Update BOTH personal AND system-wide notifications
-#             Notification.query.filter(
-#                 or_(Notification.user_id == current_user_id, Notification.user_id == None),
-#                 Notification.is_read == False
-#             ).update({Notification.is_read: True}, synchronize_session=False)
+#             Notification.query.filter_by(user_id=current_user_id, is_read=False)\
+#                 .update({Notification.is_read: True}, synchronize_session=False)
             
 #             db.session.commit()
-#             # log_activity('NOTIFICATION CLEARANCE', 'User', get_jwt_identity(), "Operator cleared all active alerts")
 #             return jsonify({"message": "All marked as read"}), 200
 #         except Exception as e:
 #             db.session.rollback()
@@ -631,13 +723,10 @@
 #         try:
 #             current_user_id = get_jwt_identity()
             
-#             # FIX: Delete BOTH personal AND system-wide notifications
-#             Notification.query.filter(
-#                 (Notification.user_id == current_user_id) | (Notification.user_id == None)
-#             ).delete(synchronize_session=False)
+#             Notification.query.filter_by(user_id=current_user_id)\
+#                 .delete(synchronize_session=False)
             
 #             db.session.commit()
-#             # log_activity('NOTIFICATION PURGE', 'User', get_jwt_identity(), "Permanently deleted notification history")
 #             return jsonify({"message": "Registry cleared"}), 200
 #         except Exception as e:
 #             db.session.rollback()
@@ -759,15 +848,6 @@
 #                 years_farming=get_val('years_farming', int)
 #             )
 #             db.session.add(farmer)
-            
-#             # --- AUTO-NOTIFICATION TRIGGER ---
-#             broadcast_notification(
-#                 title="New Farmer Onboarded", 
-#                 message=f"{data.get('first_name')} {data.get('last_name')} has been registered by {current_user.full_name}.",
-#                 target_user_id=None # Broadcast to all
-#             )
-#             # ---------------------------------
-
 #             db.session.commit()
 
 #             if data.get('products'):
@@ -804,7 +884,6 @@
 #                 name=data['name'],
 #                 type=data.get('type', 'Cooperative'),
 #                 description=data.get('description'),
-#                 # Map frontend 'location' to backend 'address'
 #                 address=data.get('location') 
 #             )
 #             db.session.add(org)
@@ -866,7 +945,6 @@
 #                         delete_profile_image(farmer.profile_image)
 #                     farmer.profile_image = new_filename
 
-#             # MAPPING: Frontend 'extension_name' -> DB 'suffix'
 #             key_mapping = {
 #                 'extension_name': 'suffix' 
 #             }
@@ -1234,33 +1312,53 @@
         
 #         data = request.get_json()
         
-#         experience = FarmerExperience(
-#             farmer_id=data['farmer_id'],
-#             experience_type=data['experience_type'],
-#             title=data['title'],
-#             description=data['description'],
-#             date_recorded=datetime.strptime(data['date_recorded'], '%Y-%m-%d').date() if data.get('date_recorded') else date.today(),
-#             interviewer_id=current_user.id,
-#             location=data.get('location'),
-#             context=data.get('context'),
-#             impact_level=data.get('impact_level')
-#         )
-        
-#         db.session.add(experience)
-        
-#         # --- AUTO-NOTIFICATION TRIGGER ---
-#         broadcast_notification(
-#             title="Knowledge Base Update", 
-#             message=f"New {data['experience_type']} recorded: '{data['title']}'",
-#             target_user_id=None
-#         )
-#         # ---------------------------------
+#         try:
+#             experience = FarmerExperience(
+#                 farmer_id=data['farmer_id'],
+#                 experience_type=data['experience_type'],
+#                 title=data['title'],
+#                 description=data['description'],
+#                 date_recorded=datetime.strptime(data['date_recorded'], '%Y-%m-%d').date() if data.get('date_recorded') else date.today(),
+#                 interviewer_id=current_user.id,
+#                 location=data.get('location'),
+#                 context=data.get('context'),
+#                 impact_level=data.get('impact_level'),
+#                 comments_enabled=data.get('comments_enabled', True)
+#             )
+            
+#             db.session.add(experience)
+            
+#             # --- AUTO-NOTIFICATION TRIGGER ---
+#             broadcast_notification(
+#                 title="Knowledge Base Update", 
+#                 message=f"New {data['experience_type']} recorded: '{data['title']}'",
+#                 target_user_id=None
+#             )
+#             # ---------------------------------
 
+#             db.session.commit()
+            
+#             log_activity('EXPERIENCE CREATED', 'Farmer Experience', experience.id)
+            
+#             return jsonify({'message': 'Experience recorded successfully', 'experience': experience.to_dict(include_relations=True, current_user_id=current_user_id)}), 201
+        
+#         except Exception as e:
+#             db.session.rollback()
+#             print(f"CREATE EXPERIENCE ERROR: {str(e)}")
+#             return jsonify({'error': str(e)}), 400
+    
+#     @app.route('/api/experiences/<int:id>', methods=['PUT'])
+#     @jwt_required()
+#     def update_experience(id):
+#         current_user_id = get_jwt_identity()
+#         exp = FarmerExperience.query.get_or_404(id)
+#         data = request.get_json()
+        
+#         if 'comments_enabled' in data:
+#             exp.comments_enabled = data['comments_enabled']
+        
 #         db.session.commit()
-        
-#         log_activity('EXPERIENCE CREATED', 'Farmer Experience', experience.id)
-        
-#         return jsonify({'message': 'Experience recorded successfully', 'experience': experience.to_dict()}), 201
+#         return jsonify(exp.to_dict(current_user_id=current_user_id)), 200
     
 #     @app.route('/api/experiences/<int:id>/like', methods=['POST'])
 #     @jwt_required()
@@ -1300,6 +1398,108 @@
 #             "likes_count": experience.likes_count,
 #             "is_liked_by_me": user in experience.liked_by
 #         }), 200
+
+#     @app.route('/api/experiences/<int:id>/comments', methods=['POST'])
+#     @jwt_required()
+#     def add_experience_comment(id):
+#         current_user_id = get_jwt_identity()
+#         user = User.query.get(current_user_id)
+#         exp = FarmerExperience.query.get_or_404(id)
+        
+#         data = request.get_json()
+
+#         if not data or not data.get('text'):
+#             return jsonify({"error": "Comment text is required"}), 400
+
+#         try:
+#             # Create and save the new comment
+#             comment = ExperienceComment(
+#                 experience_id=id,
+#                 user_id=user.id,
+#                 text=data.get('text')
+#             )
+#             db.session.add(comment)
+#             db.session.commit()
+
+#             # Notify others
+#             if exp.interviewer_id and str(exp.interviewer_id) != str(user.id):
+#                 broadcast_notification(
+#                     title="New Insight Comment",
+#                     message=f"{user.full_name} commented on '{exp.title}'.",
+#                     target_user_id=exp.interviewer_id
+#                 )
+
+#             log_activity('EXPERIENCE COMMENTED', 'FarmerExperience', exp.id, f"{user.username} commented on insight.")
+
+#             return jsonify({'message': 'Comment added', 'comment': comment.to_dict(current_user_id=current_user_id)}), 201
+            
+#         except Exception as e:
+#             db.session.rollback()
+#             print(f"❌ COMMENT ERROR: {e}")
+#             return jsonify({"error": "Failed to save comment"}), 500
+        
+#     @app.route('/api/experiences/<int:exp_id>/comments/<int:comment_id>', methods=['PUT'])
+#     @jwt_required()
+#     def update_comment_text(exp_id, comment_id):
+#         current_user_id = get_jwt_identity()
+#         comment = ExperienceComment.query.filter_by(id=comment_id, experience_id=exp_id).first_or_404()
+        
+#         # Security: Only the author or an admin can edit
+#         user = User.query.get(current_user_id)
+#         if str(comment.user_id) != str(current_user_id) and user.role != 'admin':
+#             return jsonify({'error': 'Unauthorized'}), 403
+            
+#         data = request.get_json()
+#         if 'text' in data:
+#             comment.text = data['text']
+#             db.session.commit()
+#             return jsonify({'message': 'Comment updated', 'comment': comment.to_dict(current_user_id=current_user_id)}), 200
+            
+#         return jsonify({'error': 'No text provided'}), 400
+
+#     # ----------------------------------------------------
+#     # DELETE COMMENT
+#     # ----------------------------------------------------
+#     @app.route('/api/experiences/<int:exp_id>/comments/<int:comment_id>', methods=['DELETE'])
+#     @jwt_required()
+#     def delete_comment_text(exp_id, comment_id):
+#         current_user_id = get_jwt_identity()
+#         comment = ExperienceComment.query.filter_by(id=comment_id, experience_id=exp_id).first_or_404()
+        
+#         # Security: Only the author or an admin can delete
+#         user = User.query.get(current_user_id)
+#         if str(comment.user_id) != str(current_user_id) and user.role != 'admin':
+#             return jsonify({'error': 'Unauthorized'}), 403
+            
+#         db.session.delete(comment)
+#         db.session.commit()
+#         return jsonify({'message': 'Comment deleted'}), 200
+
+#     # ----------------------------------------------------
+#     # LIKE/DISLIKE A COMMENT
+#     # ----------------------------------------------------
+#     @app.route('/api/experiences/<int:exp_id>/comments/<int:comment_id>/like', methods=['POST'])
+#     @jwt_required()
+#     def toggle_comment_like(exp_id, comment_id):
+#         current_user_id = get_jwt_identity()
+#         user = User.query.get(current_user_id)
+#         comment = ExperienceComment.query.filter_by(id=comment_id, experience_id=exp_id).first_or_404()
+        
+#         if user in comment.liked_by:
+#             comment.liked_by.remove(user)
+#             action = "unliked"
+#         else:
+#             comment.liked_by.append(user)
+#             action = "liked"
+            
+#         db.session.commit()
+#         return jsonify({
+#             'status': 'success',
+#             'action': action,
+#             'likes_count': len(comment.liked_by),
+#             'is_liked_by_me': action == 'liked'
+#         }), 200
+
     
 #     # ============ Research Projects Routes ============
     
@@ -1428,7 +1628,7 @@
 #                         if top_product:
 #                             top_crop_name = top_product[0]
 #                     except:
-#                         pass # Fallback to "Mixed Crops" if query fails
+#                         pass 
                 
 #                 # Check if lat/lng exist in DB, otherwise generate pseudo-coordinates around San Pablo
 #                 lat = getattr(b, 'latitude', None)
@@ -1643,7 +1843,6 @@
 #             db.session.rollback()
 #             return jsonify({'error': str(e)}), 400
 
-#     # ADDED DELETE ROUTE HERE
 #     @app.route('/api/users/<int:id>', methods=['DELETE'])
 #     @jwt_required()
 #     def delete_user(id):
@@ -1662,19 +1861,10 @@
 #         user_name = user_to_delete.username
         
 #         try:
-#             # 3. UNLINK RELATED RECORDS (The Fix)
-#             # instead of crashing, we set the 'author' of these records to NULL (Unknown)
-            
-#             # Unlink Farmers encoded by this user
+#             # 3. UNLINK RELATED RECORDS
 #             Farmer.query.filter_by(data_encoder_id=id).update({'data_encoder_id': None})
-            
-#             # Unlink Experiences recorded by this user
 #             FarmerExperience.query.filter_by(interviewer_id=id).update({'interviewer_id': None})
-            
-#             # Unlink Projects led by this user
 #             ResearchProject.query.filter_by(principal_investigator_id=id).update({'principal_investigator_id': None})
-            
-#             # Unlink Activity Logs (Keep the history, remove the link)
 #             ActivityLog.query.filter_by(user_id=id).update({'user_id': None})
 
 #             # 4. Execute Deletion
@@ -1687,9 +1877,6 @@
 #             db.session.rollback()
 #             print(f"❌ DELETE USER ERROR: {str(e)}")
 #             return jsonify({'error': f'Database Constraint Error: {str(e)}'}), 500
-        
-        
-    
     
 #     # ============ Activity Logs Routes ============
     
@@ -1699,7 +1886,6 @@
 #         current_user_id = get_jwt_identity()
 #         current_user = User.query.get(current_user_id)
         
-#         # --- FIX: Allow all authenticated roles to see logs (or at least their own) ---
 #         if current_user.role not in ['admin', 'researcher', 'data_encoder', 'viewer']:
 #             return jsonify({'error': 'Unauthorized'}), 403
         
@@ -1721,6 +1907,10 @@
 
 #     return app
 
+
+
 # if __name__ == '__main__':
 #     app = create_app()
-#     app.run(host='127.0.0.1', port=5001, debug=True)
+#     app.run(host='0.0.0.0', port=5001, debug=True)
+    
+    

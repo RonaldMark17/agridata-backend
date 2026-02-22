@@ -38,11 +38,11 @@ def create_app(config_name='development'):
     
     # Allow specific origin for CORS - Enhanced headers
     CORS(app, 
-     resources={r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:5173", "https://agridata.ct.ws"]}}, 
-     supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-
+         resources={r"/api/*": {"origins": "*"}}, # Allowing '*' is easiest for ngrok
+         supports_credentials=True,
+         # MUST INCLUDE "ngrok-skip-browser-warning" in allow_headers
+         allow_headers=["Content-Type", "Authorization", "ngrok-skip-browser-warning"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
     jwt = JWTManager(app)
 
     # --- NEW: JWT Blocklist Callbacks for Session Management ---
@@ -69,9 +69,10 @@ def create_app(config_name='development'):
     def handle_preflight():
         if request.method == "OPTIONS":
             res = jsonify({'status': 'ok'})
-            res.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin"))
+            res.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
             res.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-            res.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+            # MUST INCLUDE "ngrok-skip-browser-warning" here as well
+            res.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,ngrok-skip-browser-warning")
             return res, 200
     
     # Create upload folder immediately
