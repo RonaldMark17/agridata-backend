@@ -1,0 +1,28 @@
+runtime: python311
+service: backend
+
+instance_class: F1
+
+entrypoint: gunicorn -b :8080 app:app
+
+# Environment variables to replace your .env file in production
+env_variables:
+  FLASK_ENV: "production"
+  DATABASE_URL: 'mysql://root:feacOPHmpmANpLLiypCFnFKYKQBgzMTx@centerbeam.proxy.rlwy.net:31192/agridata'
+  JWT_ACCESS_TOKEN_EXPIRES: "86400"
+  MAIL_SERVER: "smtp.gmail.com"
+  MAIL_PORT: "587"
+  MAIL_USE_TLS: "True"
+  # Note: For sensitive keys like SECRET_KEY, it is better to use 
+  # Google Secret Manager, but you can place them here for now:
+  SECRET_KEY: "5ccd0e882a4ab8801e60b7fd9a0fc2081993fca07d9d3d5270372e6e5712b25c"
+  JWT_SECRET_KEY: "87ffb15a41b02dcea7b5f83160c5edb7c388d2c83fbbeece02ac67c33d14c5f6"
+  MAIL_USERNAME: "markronald265@gmail.com"
+  MAIL_PASSWORD: "qlfxiqvfyodybpsz"
+  MAIL_DEFAULT_SENDER: "markronald265@gmail.com"
+
+# Scaling configuration (Optional: keeps costs low)
+automatic_scaling:
+  target_cpu_utilization: 0.65
+  min_instances: 0
+  max_instances: 2

@@ -567,7 +567,7 @@ def create_app(config_name='development'):
     app.config['MAIL_USE_SSL'] = False
     app.config['MAIL_USERNAME'] = 'markronald265@gmail.com'
     app.config['MAIL_PASSWORD'] = 'qlfxiqvfyodybpsz'
-    app.config['MAIL_DEFAULT_SENDER'] = 'markronald265@gmail.com'
+    app.config['MAIL_DEFAULT_SENDER'] = 'Agridata'
     mail = Mail(app)
 
     otp_storage = {} 
@@ -941,7 +941,7 @@ def create_app(config_name='development'):
                         if not p.get('product_name'): continue
                         prod = AgriculturalProduct.query.filter(func.lower(AgriculturalProduct.name) == func.lower(p['product_name'].strip())).first()
                         if not prod:
-                            prod = AgriculturalProduct(name=p['product_name'].strip(), category='Crop')
+                            prod = AgriculturalProduct(name=p['product_name'].strip(), category=p.get('category', 'Others'))
                             db.session.add(prod)
                             db.session.commit()
                         db.session.add(FarmerProduct(farmer_id=farmer.id, product_id=prod.id, production_volume=p.get('production_volume', 0), unit=p.get('unit', 'kg'), is_primary=p.get('is_primary', False)))
@@ -1996,6 +1996,6 @@ def create_app(config_name='development'):
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=True)
     
     
