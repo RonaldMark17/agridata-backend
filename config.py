@@ -37,9 +37,12 @@ class DevelopmentConfig(Config):
     # Defaulting to XAMPP standard (root user, no password)
     # If you have a password, change to: 'mysql+pymysql://root:YOUR_PASSWORD@localhost/agridata'
     SQLALCHEMY_DATABASE_URI = os.environ.get('DEV_DATABASE_URL') or \
-        'mysql://root:feacOPHmpmANpLLiypCFnFKYKQBgzMTx@centerbeam.proxy.rlwy.net:31192/agridata'
-        # 'mysql+pymysql://root:@localhost/agridata'
+        'mysql+pymysql://root:CuexutHfeIQFWPGyfXUHSBKvOwwPkebY@shortline.proxy.rlwy.net:15175/agridata'
+        # 'mysql://root:feacOPHmpmANpLLiypCFnFKYKQBgzMTx@centerbeam.proxy.rlwy.net:31192/agridata'
         
+        # 'mysql://root:feacOPHmpmANpLLiypCFnFKYKQBgzMTx@centerbeam.proxy.rlwy.net:31192/agridata'
+        
+        # 'mysql+pymysql://root:@localhost/agridata'
          
         #'mysql+pymysql://if0_41160083:ylbXbC9eJk6iSn@sql213.infinityfree.com/if0_41160083_agridata'
         
@@ -49,14 +52,14 @@ class ProductionConfig(Config):
     DEBUG = False
     # In production, require the environment variable to be set
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or \
-        'mysql://root:feacOPHmpmANpLLiypCFnFKYKQBgzMTx@centerbeam.proxy.rlwy.net:31192/agridata'
+        'mysql+pymysql://user:@localhost/agridata_prod'
     
 class TestingConfig(Config):
     """Testing configuration"""
     TESTING = True
     # Use a separate test database
     SQLALCHEMY_DATABASE_URI = os.environ.get('TEST_DATABASE_URL') or \
-        'mysql://root:feacOPHmpmANpLLiypCFnFKYKQBgzMTx@centerbeam.proxy.rlwy.net:31192/agridata'
+        'mysql+pymysql://root:@localhost/agridata_test'
 
 config = {
     'development': DevelopmentConfig,
